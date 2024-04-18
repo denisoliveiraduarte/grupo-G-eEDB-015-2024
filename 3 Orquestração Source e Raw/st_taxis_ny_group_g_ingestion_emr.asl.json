@@ -1,0 +1,130 @@
+{
+  "Comment": "An example of the Amazon States Language for running jobs on Amazon EMR",
+  "StartAt": "Create an EMR cluster",
+  "States": {
+    "Create an EMR cluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::elasticmapreduce:createCluster.sync",
+      "Parameters": {
+        "Name": "ClusterIngestion",
+        "AutoTerminationPolicy": {
+          "IdleTimeout": 3600
+        },
+        "VisibleToAllUsers": true,
+        "ReleaseLabel": "emr-7.0.0",
+        "Applications": [
+          {
+            "Name": "Livy"
+          },
+          {
+            "Name": "Spark"
+          },
+          {
+            "Name": "Hadoop"
+          },
+          {
+            "Name": "JupyterEnterpriseGateway"
+          },
+          {
+            "Name": "Hive"
+          }
+        ],
+        "ServiceRole": "EMR_DefaultRole",
+        "JobFlowRole": "EMR_EC2_DefaultRole",
+        "LogUri": "s3://aws-logs-339712904344-us-east-1/elasticmapreduce/",
+        "Instances": {
+          "KeepJobFlowAliveWhenNoSteps": true,
+          "InstanceFleets": [
+            {
+              "Name": "MyMasterFleet",
+              "InstanceFleetType": "MASTER",
+              "TargetOnDemandCapacity": 1,
+              "InstanceTypeConfigs": [
+                {
+                  "InstanceType": "m5.xlarge"
+                }
+              ]
+            },
+            {
+              "Name": "MyCoreFleet",
+              "InstanceFleetType": "CORE",
+              "TargetOnDemandCapacity": 1,
+              "InstanceTypeConfigs": [
+                {
+                  "InstanceType": "m5.xlarge"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "ResultPath": "$.cluster",
+      "Next": "Import Taxi Data From Source"
+    },
+    "Import Taxi Data From Source": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::elasticmapreduce:addStep.sync",
+      "Parameters": {
+        "ClusterId.$": "$.cluster.ClusterId",
+        "Step": {
+          "Name": "Import Taxi Data From Source",
+          "HadoopJarStep": {
+            "Jar": "s3://us-east-1.elasticmapreduce/libs/script-runner/script-runner.jar",
+            "Args": [
+              "s3://scripts-ingestion-taxis-ny/script_importSource.sh"
+            ]
+          }
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": "$.firstStep",
+      "Next": "Import Taxi Data to Raw"
+    },
+    "Import Taxi Data to Raw": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::elasticmapreduce:addStep.sync",
+      "Parameters": {
+        "ClusterId.$": "$.cluster.ClusterId",
+        "Step": {
+          "Name": "Import Taxi Data to Raw",
+          "ActionOnFailure": "CONTINUE",
+          "HadoopJarStep": {
+            "Jar": "s3://us-east-1.elasticmapreduce/libs/script-runner/script-runner.jar",
+            "Args": [
+              "s3://scripts-ingestion-taxis-ny/script_importRaw.sh"
+            ]
+          }
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": "$.firstStep",
+      "Next": "Terminate Cluster"
+    },
+    "Terminate Cluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::elasticmapreduce:terminateCluster",
+      "Parameters": {
+        "ClusterId.$": "$.cluster.ClusterId"
+      },
+      "End": true
+    }
+  }
+}
